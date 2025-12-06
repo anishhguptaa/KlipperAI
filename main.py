@@ -4,10 +4,7 @@ from src.core.config import settings
 from src.core.logger import configure_application_logging, get_logger
 
 # Configure application-wide logging
-configure_application_logging(
-    level=settings.LOG_LEVEL,
-    log_file=settings.LOG_FILE
-)
+configure_application_logging(level=settings.LOG_LEVEL, log_file=settings.LOG_FILE)
 
 logger = get_logger(__name__)
 
@@ -26,6 +23,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.get("/health", tags=["Root"])
 @app.get("/", tags=["Root"])
