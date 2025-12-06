@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     # CORS
     ALLOWED_ORIGINS: List[str] = Field(default=["*"], description="Allowed origins for CORS")
     
+    # Database
+    DATABASE_URL: str = Field(description="PostgreSQL database URL")
+    
+    # Azure Storage
+    AZURE_STORAGE_ACCOUNT_NAME: str = Field(description="Azure Storage account name")
+    AZURE_STORAGE_ACCOUNT_KEY: str = Field(description="Azure Storage account key")
+    AZURE_STORAGE_CONTAINER_NAME: str = Field(description="Azure Storage container name")
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
