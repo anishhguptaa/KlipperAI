@@ -1,12 +1,49 @@
-import uvicorn
-import fastapi
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from src.core.config import settings
+from src.core.logger import configure_application_logging, get_logger
 
-app = fastapi.FastAPI()
+# Configure application-wide logging
+configure_application_logging(
+    level=settings.LOG_LEVEL,
+    log_file=settings.LOG_FILE
+)
 
-@app.get("/health")
-@app.get("/")
-def health():
-    return {"message": "The server is running!"}
+logger = get_logger(__name__)
+
+# Initialize FastAPI app
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# Configure CORS (must be added before authentication middleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health", tags=["Root"])
+@app.get("/", tags=["Root"])
+async def root():
+    """Root endpoint - health check"""
+    logger.info("Health check endpoint accessed")
+    return {
+        "status": "online",
+        "message": f"{settings.PROJECT_NAME} server is running",
+    }
+
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.RELOAD,
+    )
