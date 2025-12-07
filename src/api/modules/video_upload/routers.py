@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional
-from src.modules.video_upload.services import video_upload_service
+from src.api.modules.video_upload.services import video_upload_service
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
