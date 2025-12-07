@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import settings
 from src.core.logger import configure_application_logging, get_logger
 from src.core.database import init_db
-from src.modules.video_upload.routers import router as video_upload_router
+from src.api.modules.video_upload.routers import router as video_upload_router
 
 # Configure application-wide logging
 configure_application_logging(level=settings.LOG_LEVEL, log_file=settings.LOG_FILE)
