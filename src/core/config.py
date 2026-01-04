@@ -20,6 +20,9 @@ class Settings(BaseSettings):
         default=None, nullable=True, description="Log file path"
     )
 
+    #api keys
+    ASSEMBLYAI_API_KEY: str = Field(description="AssemblyAI API key")
+
     # CORS
     ALLOWED_ORIGINS: List[str] = Field(default=["*"], description="Allowed origins for CORS")
     
@@ -30,6 +33,16 @@ class Settings(BaseSettings):
     AZURE_STORAGE_ACCOUNT_NAME: str = Field(description="Azure Storage account name")
     AZURE_STORAGE_ACCOUNT_KEY: str = Field(description="Azure Storage account key")
     AZURE_STORAGE_CONTAINER_NAME: str = Field(description="Azure Storage container name")
+    AZURE_STORAGE_CONNECTION_STRING: str = Field(description="Azure Storage connection string")
+    
+    # Azure Queue Storage
+    AZURE_QUEUE_NAME: str = Field(description="Azure Queue name for video processing")
+    
+    # JWT Authentication
+    JWT_SECRET_KEY: str = Field(description="Secret key for JWT token signing")
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT algorithm")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15, description="Access token expiry in minutes")
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=30, description="Refresh token expiry in days")
     
     class Config:
         env_file = ".env"
