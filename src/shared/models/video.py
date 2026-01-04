@@ -1,5 +1,5 @@
 from sqlalchemy import Column, BigInteger, Integer, Text, TIMESTAMP, ForeignKey, func
-from src.core.database import Base
+from src.shared.core.database import Base
 
 
 class Video(Base):

@@ -1,6 +1,6 @@
 import assemblyai as aai
-from src.core.config import settings
-from src.core.logger import get_logger
+from src.shared.core.config import settings
+from src.shared.core.logger import get_logger
 
 logger = get_logger(__name__)
 
