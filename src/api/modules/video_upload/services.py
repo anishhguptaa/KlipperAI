@@ -85,12 +85,16 @@ class VideoUploadService:
         Verify if a blob exists in the container
         
         Args:
-            blob_name: Name of the blob to check
+            blob_name: Name of the blob to check (with or without 'videos/' prefix)
             
         Returns:
             bool: True if blob exists, False otherwise
         """
         try:
+            # Ensure blob_name includes the videos/ prefix if not already present
+            if not blob_name.startswith("videos/"):
+                blob_name = f"videos/{blob_name}"
+            
             blob_client = self.blob_service_client.get_blob_client(
                 container=self.container_name,
                 blob=blob_name
@@ -99,6 +103,22 @@ class VideoUploadService:
         except Exception as e:
             logger.error(f"Error checking blob existence: {str(e)}")
             return False
+    
+    def get_blob_url(self, blob_name: str) -> str:
+        """
+        Get the full URL of a blob
+        
+        Args:
+            blob_name: Name of the blob (with or without 'videos/' prefix)
+            
+        Returns:
+            str: Full URL of the blob
+        """
+        # Ensure blob_name includes the videos/ prefix if not already present
+        if not blob_name.startswith("videos/"):
+            blob_name = f"videos/{blob_name}"
+            
+        return f"https://{self.account_name}.blob.core.windows.net/{self.container_name}/{blob_name}"
 
 
 # Singleton instance

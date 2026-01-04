@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Optional
+from sqlalchemy.orm import Session
 from src.api.modules.video_upload.services import video_upload_service
 from src.core.logger import get_logger
+from src.core.database import get_db
+from src.core.queue_service import queue_service
+from src.models.DbModels import Video
 
 logger = get_logger(__name__)
 
@@ -100,15 +104,22 @@ async def generate_upload_url(
 
 
 @router.get("/verify-upload/{blob_name}")
-async def verify_upload(blob_name: str):
+async def verify_upload(
+    blob_name: str,
+    db: Session = Depends(get_db),
+    user_id: Optional[int] = Query(None, description="User ID who uploaded the video")
+):
     """
-    Verify if a video has been successfully uploaded to Azure Blob Storage
+    Verify if a video has been successfully uploaded to Azure Blob Storage,
+    create a video record in the database, and trigger video processing via Azure Queue.
     
     Args:
         blob_name: Name of the blob to verify
+        db: Database session
+        user_id: Optional user ID who uploaded the video
         
     Returns:
-        dict: Contains verification status
+        dict: Contains verification status, video ID, and processing status
         
     Raises:
         HTTPException: If verification fails
@@ -116,23 +127,55 @@ async def verify_upload(blob_name: str):
     try:
         logger.info(f"Verifying blob existence: {blob_name}")
         
+        # Verify blob exists in Azure Storage
         exists = video_upload_service.verify_blob_exists(blob_name)
         
-        if exists:
-            return {
-                "exists": True,
-                "blob_name": blob_name,
-                "message": "Video uploaded successfully"
-            }
-        else:
+        if not exists:
             return {
                 "exists": False,
                 "blob_name": blob_name,
                 "message": "Video not found or upload incomplete"
             }
+        
+        # Get blob URL
+        blob_url = video_upload_service.get_blob_url(blob_name)
+        
+        # Create video record in database
+        video = Video(
+            user_id=user_id,
+            blob_url=blob_url,
+            duration_seconds=None  # Will be populated during processing
+        )
+        
+        db.add(video)
+        db.commit()
+        db.refresh(video)
+        
+        logger.info(f"Video record created with ID: {video.id}")
+        
+        # Send message to Azure Queue for video processing
+        queue_success = queue_service.send_video_processing_message(
+            video_id=video.id,
+            blob_name=blob_name,
+            blob_url=blob_url,
+            user_id=user_id
+        )
+        
+        if not queue_success:
+            logger.warning(f"Failed to send queue message for video ID: {video.id}")
+        
+        return {
+            "exists": True,
+            "blob_name": blob_name,
+            "video_id": video.id,
+            "blob_url": blob_url,
+            "queue_message_sent": queue_success,
+            "message": "Video uploaded successfully and processing initiated" if queue_success else "Video uploaded but processing queue failed"
+        }
             
     except Exception as e:
-        logger.error(f"Failed to verify blob: {str(e)}")
+        logger.error(f"Failed to verify blob and process: {str(e)}")
+        db.rollback()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to verify upload: {str(e)}"
