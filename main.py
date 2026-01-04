@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import settings
@@ -13,18 +14,23 @@ configure_application_logging(level=settings.LOG_LEVEL, log_file=settings.LOG_FI
 
 logger = get_logger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events"""
+    # Startup
+    init_db()
+    yield
+    # Shutdown (if needed, add cleanup code here)
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title=settings.PROJECT_NAME,
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
-
-# Initialize database connection on startup
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database connection on startup"""
-    init_db()
 
 # Configure CORS (must be added before authentication middleware)
 app.add_middleware(
