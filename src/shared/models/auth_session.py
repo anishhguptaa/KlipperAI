@@ -1,6 +1,6 @@
 from sqlalchemy import Column, BigInteger, String, Text, TIMESTAMP, Boolean, ForeignKey, UUID
 from sqlalchemy.orm import relationship
-from src.core.database import Base
+from src.shared.core.database import Base
 from sqlalchemy import func, UniqueConstraint
 
 

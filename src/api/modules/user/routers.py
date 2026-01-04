@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
-from src.core.database import get_db
+from src.shared.core.database import get_db
 from src.api.modules.auth.schemas import UserResponse
 from .service import UserService
 

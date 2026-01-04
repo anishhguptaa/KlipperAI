@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Cookie, Request
 from sqlalchemy.orm import Session
 import uuid
-from src.core.database import get_db
-from src.core.config import settings
-from src.core.logger import get_logger
+from src.shared.core.database import get_db
+from src.shared.core.config import settings
+from src.shared.core.logger import get_logger
 from .schemas import (
     RegisterRequest, 
     LoginRequest, 
@@ -271,7 +271,7 @@ async def refresh_token(
         
         # Query the database for the session
         from sqlalchemy import and_
-        from src.models.DbModels import AuthSession
+        from src.shared.models import AuthSession
         from datetime import datetime, timezone, timedelta
         
         session = db.query(AuthSession).filter(

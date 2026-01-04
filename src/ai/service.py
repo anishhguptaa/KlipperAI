@@ -1,7 +1,7 @@
 import os
 import yt_dlp
 from typing import List, Tuple
-from src.core.logger import get_logger
+from src.shared.core.logger import get_logger
 
 logger = get_logger(__name__)
 

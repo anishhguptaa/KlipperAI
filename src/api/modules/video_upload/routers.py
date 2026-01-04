@@ -3,10 +3,10 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy.orm import Session
 from src.api.modules.video_upload.services import video_upload_service
-from src.core.logger import get_logger
-from src.core.database import get_db
-from src.core.queue_service import queue_service
-from src.models.DbModels import Video
+from src.shared.core.logger import get_logger
+from src.shared.core.database import get_db
+from src.shared.services.queue_service import queue_service
+from src.shared.models import Video
 
 logger = get_logger(__name__)
 

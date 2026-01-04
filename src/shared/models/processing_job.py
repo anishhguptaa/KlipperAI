@@ -1,6 +1,6 @@
 from sqlalchemy import Column, BigInteger, Text, TIMESTAMP, ForeignKey, Enum, func
-from src.core.database import Base
-from src.models.enums import ProcessingStatus
+from src.shared.core.database import Base
+from src.shared.enums import ProcessingStatus
 
 
 class ProcessingJob(Base):

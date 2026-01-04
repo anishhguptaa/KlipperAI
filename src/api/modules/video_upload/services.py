@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
-from src.core.config import settings
-from src.core.logger import get_logger
+from src.shared.core.config import settings
+from src.shared.core.logger import get_logger
 import uuid
 
 logger = get_logger(__name__)

@@ -2,8 +2,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from fastapi import HTTPException, status
 from src.api.modules.auth.schemas import UserResponse
-from src.core.logger import get_logger
-from src.models.DbModels import User
+from src.shared.core.logger import get_logger
+from src.shared.models import User
 
 logger = get_logger(__name__)
 
