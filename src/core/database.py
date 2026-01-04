@@ -39,3 +39,12 @@ def init_db():
     except Exception as e:
         logger.error(f"Failed to connect to database: {e}")
         raise
+
+
+def cleanup_db():
+    """Cleanup database connections on shutdown"""
+    try:
+        engine.dispose()
+        logger.info("Database connections closed successfully")
+    except Exception as e:
+        logger.error(f"Error during database cleanup: {e}")

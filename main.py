@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import settings
 from src.core.logger import configure_application_logging, get_logger
-from src.core.database import init_db
+from src.core.database import init_db, cleanup_db
 from src.middleware.auth_middleware import AuthMiddleware
 from src.api.modules.video_upload.routers import router as video_upload_router
 from src.api.modules.auth.routers import router as auth_router
@@ -21,7 +21,8 @@ async def lifespan(app: FastAPI):
     # Startup
     init_db()
     yield
-    # Shutdown (if needed, add cleanup code here)
+    # Shutdown
+    cleanup_db()
 
 
 # Initialize FastAPI app
