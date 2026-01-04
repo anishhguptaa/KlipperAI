@@ -8,8 +8,8 @@ import jwt
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from src.core.config import settings
-from src.models.DbModels import User, AuthSession
+from src.shared.core.config import settings
+from src.shared.models import User, AuthSession
 
 
 class AuthService:
