@@ -11,7 +11,7 @@ from src.shared.models import Video
 logger = get_logger(__name__)
 
 router = APIRouter(
-    prefix="/api/videoInputOutput",
+    prefix="/videoInputOutput",
     tags=["Video Input Output"]
 )
 
