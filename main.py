@@ -3,7 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import settings
 from src.core.logger import configure_application_logging, get_logger
 from src.core.database import init_db
+from src.core.auth_middleware import AuthMiddleware
 from src.api.modules.video_upload.routers import router as video_upload_router
+from src.api.modules.auth.routers import router as auth_router
+from src.api.modules.user.routers import router as user_router
 
 # Configure application-wide logging
 configure_application_logging(level=settings.LOG_LEVEL, log_file=settings.LOG_FILE)
@@ -32,8 +35,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(
+    AuthMiddleware,
+    public_paths={"/", "/health", "/openapi.json", "/docs", "/redoc"},
+    public_prefixes=("/auth",),
+)
+
 # Register routers
 app.include_router(video_upload_router)
+app.include_router(auth_router)
+app.include_router(user_router)
 
 @app.get("/health", tags=["Root"])
 @app.get("/", tags=["Root"])
