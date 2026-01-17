@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     #api keys
     ASSEMBLYAI_API_KEY: str = Field(description="AssemblyAI API key")
+    OPENAI_API_KEY: str = Field(description="OpenAI API key")
 
     # CORS
     ALLOWED_ORIGINS: List[str] = Field(default=["*"], description="Allowed origins for CORS")
