@@ -18,6 +18,12 @@ router = APIRouter(
 )
 
 
+class VerifyUploadRequest(BaseModel):
+    """Request model for video upload verification"""
+    blob_name: str = Field(..., description="Name of the blob to verify")
+    duration_seconds: int = Field(..., description="Duration of the video in seconds")
+
+
 class SASTokenResponse(BaseModel):
     """Response model for SAS token generation"""
     blob_name: str = Field(..., description="Unique name of the blob in Azure Storage")
@@ -107,9 +113,9 @@ async def generate_upload_url(
         )
 
 
-@router.get("/verify-upload/{blob_name}")
+@router.post("/verify-upload")
 async def verify_upload(
-    blob_name: str,
+    request_data: VerifyUploadRequest,
     request: Request,
     db: Session = Depends(get_db)
 ):
@@ -118,7 +124,7 @@ async def verify_upload(
     create a video record in the database, and trigger video processing via Azure Queue.
     
     Args:
-        blob_name: Name of the blob to verify
+        request_data: Contains blob_name and duration_seconds
         request: Request object (contains authenticated user_id)
         db: Database session
         
@@ -131,8 +137,10 @@ async def verify_upload(
     try:
         # Get user_id from authenticated request
         user_id = request.state.user_id
+        blob_name = request_data.blob_name
+        duration_seconds = request_data.duration_seconds
         
-        logger.info(f"Verifying blob existence: {blob_name} for user_id={user_id}")
+        logger.info(f"Verifying blob existence: {blob_name} for user_id={user_id}, duration={duration_seconds}s")
         
         # Verify blob exists in Azure Storage
         exists = video_upload_service.verify_blob_exists(blob_name, user_id=user_id)
@@ -151,7 +159,7 @@ async def verify_upload(
         video = Video(
             user_id=user_id,
             blob_url=blob_url,
-            duration_seconds=None  # Will be populated during processing
+            duration_seconds=duration_seconds
         )
         
         db.add(video)
@@ -280,8 +288,8 @@ async def get_user_videos(
         user_id = request.state.user_id
         logger.info(f"Getting all videos for user_id={user_id}")
         
-        # Query all videos for the user
-        videos = db.query(Video).filter(Video.user_id == user_id).all()
+        # Query all videos for the user, ordered by created_at desc (latest first)
+        videos = db.query(Video).filter(Video.user_id == user_id).order_by(Video.created_at.desc()).all()
         
         # Convert to list of dictionaries
         videos_data = []
@@ -291,8 +299,7 @@ async def get_user_videos(
                 "user_id": video.user_id,
                 "blob_url": video.blob_url,
                 "duration_seconds": video.duration_seconds,
-                "created_at": video.created_at.isoformat() if video.created_at else None,
-                "updated_at": video.updated_at.isoformat() if video.updated_at else None
+                "created_at": video.created_at.isoformat() if video.created_at else None
             })
         
         return {
