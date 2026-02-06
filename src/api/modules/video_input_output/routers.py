@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy.orm import Session
+from datetime import datetime
 from src.api.modules.video_input_output.services import video_upload_service
 from src.shared.core.logger import get_logger
 from src.shared.core.database import get_db
@@ -159,7 +160,9 @@ async def verify_upload(
         video = Video(
             user_id=user_id,
             blob_url=blob_url,
-            duration_seconds=duration_seconds
+            duration_seconds=duration_seconds,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
         )
         
         db.add(video)
@@ -298,6 +301,7 @@ async def get_user_videos(
                 "id": video.id,
                 "user_id": video.user_id,
                 "blob_url": video.blob_url,
+                "thumbnail_url": video.thumbnail_url,
                 "duration_seconds": video.duration_seconds,
                 "created_at": video.created_at.isoformat() if video.created_at else None
             })

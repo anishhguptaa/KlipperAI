@@ -9,6 +9,7 @@ class Video(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     blob_url = Column(Text, nullable=False)
+    thumbnail_url = Column(Text, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
