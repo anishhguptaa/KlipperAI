@@ -1,13 +1,29 @@
 import os
 import json
 import yt_dlp
-from typing import List, Tuple, Optional
+import re
+from typing import Dict, Any, List, Tuple, Optional
 from src.shared.core.logger import get_logger
 from src.ai.assembly import transcribe_audio
 from src.ai.gpt import get_clips_from_video, Clips
-from moviepy.video.io.VideoFileClip import VideoFileClip  # type: ignore
+from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.video.VideoClip import TextClip, ColorClip
+from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+
 
 logger = get_logger(__name__)
+
+FONT = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+FONT_SIZE_MIN = 14
+FONT_SIZE_MAX = 42
+FONT_SIZE_RATIO = 0.045
+TEXT_COLOR = "white"
+HIGHLIGHT_COLOR = "yellow"
+STROKE_COLOR = "black"
+STROKE_WIDTH = 3
+BOTTOM_MARGIN = 120
+BOX_OPACITY = 0.6
+MAX_WIDTH_RATIO = 0.8
 
 
 def download_youtube_video(url: str, user_id: str, video_id: str) -> str:
@@ -142,19 +158,244 @@ def get_clips_from_transcript(user_id: str, video_id: str) -> Optional[Clips]:
     return clips_data_path
 
 
-def cut_clips_from_video(
-    video_path: str, timestamps: List[Tuple[str, str]]
-) -> List[str]:
-    """
-    Cut clips from a video
-    """
-    # TODO
-    return ["clip1.mp4", "clip2.mp4"]
+def get_timestamps_from_clips(
+    user_id: str, video_id: str, clips: Clips
+) -> Dict[str, List[Dict[str, Any]]]:
+    transcript_path = os.path.join("downloads", user_id, video_id, "transcript.json")
+    with open(transcript_path, "r", encoding="utf-8") as f:
+        transcript = json.load(f)
+
+        full_text = transcript["text"]
+    words = transcript["words"]
+
+    spans = []
+    pos = 0
+
+    for w in words:
+        w_text = w["text"]
+
+        m = re.search(re.escape(w_text), full_text[pos:], re.IGNORECASE)
+
+        if m:
+            start = pos + m.start()
+            end = start + len(m.group(0))
+        else:
+            # fallback search
+            m2 = re.search(re.escape(w_text), full_text, re.IGNORECASE)
+            if m2:
+                start = m2.start()
+                end = start + len(m2.group(0))
+            else:
+                start = pos
+                end = start + len(w_text)
+
+        spans.append((start, end))
+        pos = end
+
+    def char_to_word_index(char_pos: int) -> int:
+        for i, (s, e) in enumerate(spans):
+            if s <= char_pos < e:
+                return i
+        return len(spans) - 1
+
+    results = []
+
+    for clip in clips:
+
+        matches = list(re.finditer(re.escape(clip.strip()), full_text, re.IGNORECASE))
+
+        if not matches:
+            continue
+
+        m = matches[0]
+
+        c_start = m.start()
+        c_end = m.end()
+
+        start_idx = char_to_word_index(c_start)
+        end_idx = char_to_word_index(c_end - 1)
+
+        clip_words = words[start_idx : end_idx + 1]
+
+        result = {
+            "text": clip,
+            "start": clip_words[0]["start"],
+            "end": clip_words[-1]["end"],
+            "words": clip_words,
+        }
+
+        results.append(result)
+
+    clips_timestamps_path = os.path.join(
+        "downloads", user_id, video_id, "clips_timestamps.json"
+    )
+    with open(clips_timestamps_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=4)
+    return results
 
 
-def add_subtitles_to_videos(videos: List[str], subtitles: List[str]) -> str:
-    """
-    Add subtitles to a video
-    """
-    # TODO
-    return "Subtitles added successfully!"
+def _cut_single_clip_moviepy(args) -> str:
+    """Worker for cut_clips_from_video; must be at module level for multiprocessing."""
+    video_path, start, end, output_path = args
+
+    if end <= start:
+        raise ValueError(f"Invalid timestamps: {start} -> {end}")
+    temp_audio = os.path.splitext(output_path)[0] + "_temp.m4a"
+
+    with VideoFileClip(video_path) as video:
+        clip = video.subclipped(start, end)
+
+        clip.write_videofile(
+            output_path,
+            codec="libx264",
+            audio_codec="aac",
+            temp_audiofile=temp_audio,
+            remove_temp=True,
+            threads=2,
+            preset="medium",
+            bitrate="5000k",
+        )
+
+    return output_path
+
+
+def cut_clips_from_video(user_id: str, video_id: str, timestamps: Any) -> List[str]:
+    if isinstance(timestamps, str):
+        with open(timestamps, "r", encoding="utf-8") as f:
+            timestamps = json.load(f)
+    if isinstance(timestamps, dict):
+        flat_timestamps = [occ for occs in timestamps.values() for occ in occs]
+    else:
+        flat_timestamps = list(timestamps)
+
+    video_path = os.path.join("downloads", user_id, video_id, "video.mp4")
+    output_dir = os.path.join("downloads", user_id, video_id, "clips")
+    os.makedirs(output_dir, exist_ok=True)
+
+    jobs = []
+    for i, ts in enumerate(flat_timestamps):
+        start = ts.get("start_timestamp") or ts.get("start")
+        end = ts.get("end_timestamp") or ts.get("end")
+        output_path = os.path.join(output_dir, f"clip_{i:03d}.mp4")
+        jobs.append((video_path, start, end, output_path))
+
+    # Run sequentially; parallel FFmpeg workers often cause BrokenPipe / temp file conflicts
+    results = [_cut_single_clip_moviepy(job) for job in jobs]
+    return results
+
+
+def font_size_for_video(video_w: int, video_h: int) -> int:
+    """Compute subtitle font size from video dimensions (shorter side)."""
+    short_side = min(video_w, video_h)
+    size = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, int(short_side * FONT_SIZE_RATIO)))
+    return size
+
+
+def create_caption_clip(
+    text: str, video_w: int, video_h: int, start: float, end: float
+):
+    font_size = font_size_for_video(video_w, video_h)
+
+    txt_clip = TextClip(
+        text=text,
+        font=FONT,
+        font_size=font_size,
+        color=TEXT_COLOR,
+        stroke_color=STROKE_COLOR,
+        stroke_width=STROKE_WIDTH,
+        method="caption",
+        size=(int(video_w * MAX_WIDTH_RATIO), None),
+        text_align="center",
+    )
+
+    padding_x = max(12, font_size // 2)
+    padding_y = max(8, font_size // 3)
+
+    bg_width = txt_clip.w + padding_x
+    bg_height = txt_clip.h + padding_y
+
+    bg_clip = ColorClip(size=(bg_width, bg_height), color=(0, 0, 0)).with_opacity(
+        BOX_OPACITY
+    )
+
+    anchor_y = int(video_h * 0.75)
+    pos_y = min(anchor_y, video_h - bg_height)
+    pos_y = max(0, pos_y)
+
+    bg_clip = bg_clip.with_position(("center", pos_y))
+
+    txt_clip = txt_clip.with_position(("center", pos_y + (padding_y // 2)))
+
+    caption = (
+        CompositeVideoClip([bg_clip, txt_clip], size=(video_w, video_h))
+        .with_start(start)
+        .with_end(end)
+    )
+
+    return caption
+
+
+def build_caption_text(words: List[Dict[str, Any]]) -> str:
+    return " ".join([w["text"] for w in words])
+
+
+def add_subtitles_to_clips(
+    user_id: str, video_id: str, highlight_words: bool = False
+) -> None:
+    clips_timestamps_path = os.path.join(
+        "downloads", user_id, video_id, "clips_timestamps.json"
+    )
+    with open(clips_timestamps_path, "r", encoding="utf-8") as f:
+        clips_data = json.load(f)
+    clips_folder_path = os.path.join("downloads", user_id, video_id, "clips")
+    output_folder = os.path.join("downloads", user_id, video_id, "clips_with_subtitles")
+    os.makedirs(output_folder, exist_ok=True)
+
+    clip_files = sorted(
+        [f for f in os.listdir(clips_folder_path) if f.endswith(".mp4")]
+    )
+
+    if len(clip_files) != len(clips_data):
+        raise ValueError("Mismatch: number of clips ≠ timestamp entries")
+
+    for idx, (clip_file, clip_data) in enumerate(zip(clip_files, clips_data)):
+        video_path = os.path.join(clips_folder_path, clip_file)
+        print(f"Processing subtitles for: {clip_file}")
+        video = VideoFileClip(video_path)
+        video_w, video_h = video.size
+        caption_clips = []
+        full_text = build_caption_text(clip_data["words"])
+        caption_clips.append(
+            create_caption_clip(
+                full_text, video_w, video_h, start=0, end=video.duration
+            )
+        )
+
+        if highlight_words:
+            font_size = font_size_for_video(video_w, video_h)
+            for w in clip_data["words"]:
+                word_text = w["text"]
+                word_clip = TextClip(
+                    text=word_text,
+                    font=FONT,
+                    font_size=font_size,
+                    color=HIGHLIGHT_COLOR,
+                    stroke_color=STROKE_COLOR,
+                    stroke_width=STROKE_WIDTH,
+                )
+                word_clip = (
+                    word_clip.with_position(("center", int(video_h * 0.75)))
+                    .with_start(w["start"] - clip_data["start"])
+                    .with_end(w["end"] - clip_data["start"])
+                )
+                caption_clips.append(word_clip)
+        final = CompositeVideoClip([video] + caption_clips)
+        output_path = os.path.join(output_folder, f"subtitled_{clip_file}")
+        final.write_videofile(
+            output_path, codec="libx264", audio_codec="aac", preset="medium", threads=2
+        )
+
+        video.close()
+        final.close()
+
+    print("All clips subtitled successfully.")
