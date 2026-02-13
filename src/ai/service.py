@@ -2,7 +2,9 @@ import os
 import json
 import yt_dlp
 import re
-from typing import Dict, Any, List, Tuple, Optional
+import requests
+from urllib.parse import urlparse, parse_qs
+from typing import Dict, Any, List, Optional
 from src.shared.core.logger import get_logger
 from src.ai.assembly import transcribe_audio
 from src.ai.gpt import get_clips_from_video, Clips
@@ -75,6 +77,32 @@ def download_youtube_video(url: str, user_id: str, video_id: str) -> str:
         raise Exception(error_msg)
 
 
+def download_video_from_azure(user_id: str, video_id: str, link: str) -> None:
+    parsed = urlparse(link)
+    output_dir = os.path.join("downloads", user_id, video_id)
+    os.makedirs(output_dir, exist_ok=True)
+
+    dest_path = os.path.join("downloads", user_id, video_id, "video.mp4")
+    query = parsed.query or ""
+    qs = parse_qs(query)
+    has_sas = ("sig" in qs) or ("sv" in qs) or ("se" in qs and "sp" in qs)
+
+    if has_sas or parsed.scheme.startswith("http"):
+        try:
+            with requests.get(link, stream=True, timeout=60) as resp:
+                resp.raise_for_status()
+                with open(dest_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+            print(f"Downloaded to {dest_path}")
+            return
+        except requests.HTTPError as e:
+            raise requests.HTTPError(f"HTTP error while downloading {link}: {e}") from e
+        except requests.RequestException as e:
+            raise Exception(f"Network error while downloading {link}: {e}") from e
+
+
 def get_audio_from_video(user_id: str, video_id: str) -> Optional[str]:
     """
     Extract audio from a video file using moviepy.
@@ -103,7 +131,7 @@ def get_audio_from_video(user_id: str, video_id: str) -> Optional[str]:
             audio_path,
             codec="mp3",
             bitrate="192k",
-            logger=None,  # Suppress moviepy's verbose logging
+            logger=None,
         )
 
         video.close()
@@ -180,7 +208,6 @@ def get_timestamps_from_clips(
             start = pos + m.start()
             end = start + len(m.group(0))
         else:
-            # fallback search
             m2 = re.search(re.escape(w_text), full_text, re.IGNORECASE)
             if m2:
                 start = m2.start()
