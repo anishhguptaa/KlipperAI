@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     AZURE_STORAGE_ACCOUNT_KEY: str = Field(description="Azure Storage account key")
     AZURE_STORAGE_CONTAINER_NAME: str = Field(description="Azure Storage container name")
     AZURE_STORAGE_CONNECTION_STRING: str = Field(description="Azure Storage connection string")
+    CLIPS_STORAGE_ACCOUNT_NAME: Optional[str] = Field(
+        default=None,
+        description="Azure Storage account name for generated clips (defaults to primary account)",
+    )
+    CLIPS_STORAGE_ACCOUNT_KEY: Optional[str] = Field(
+        default=None,
+        description="Azure Storage key for generated clips (defaults to primary key)",
+    )
+    CLIPS_CONTAINER_NAME: str = Field(
+        default="clips",
+        description="Azure Storage container name for generated clips",
+    )
     
     # Azure Storage - Thumbnail Generator
     THUMBNAIL_STORAGE_CONNECTION_STRING: str = Field(

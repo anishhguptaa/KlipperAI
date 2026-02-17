@@ -26,7 +26,44 @@ class Worker:
         )
         self.video_processor = VideoProcessor()
         self.running = True
+
+    def run(self):
+        """Main worker loop - polls queue and processes messages"""
+        logger.info("Worker started - polling Azure Queue for messages...")
+        logger.info(f"Queue: {settings.AZURE_QUEUE_NAME}")
         
+        try:
+            while self.running:
+                try:
+                    # Receive messages from queue (max 10 at a time)
+                    messages = self.queue_client.receive_messages(
+                        messages_per_page=10,
+                        visibility_timeout=300  # 5 minutes to process
+                    )
+                    
+                    message_count = 0
+                    for message in messages:
+                        message_count += 1
+                        self.process_message(message)
+                    
+                    if message_count > 0:
+                        logger.info(f"Processed {message_count} messages")
+                    
+                    # Sleep briefly before next poll
+                    time.sleep(2)
+                    
+                except KeyboardInterrupt:
+                    logger.info("Worker interrupted by user")
+                    self.running = False
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"Error in worker loop: {e}", exc_info=True)
+                    time.sleep(5)  # Wait before retrying
+                    
+        finally:
+            logger.info("Worker stopped")
+
     def process_message(self, message):
         """Process a single message from the queue"""
         try:
@@ -66,42 +103,7 @@ class Worker:
             logger.error(f"Error processing message: {e}", exc_info=True)
             # Message will remain in queue and be retried
     
-    def run(self):
-        """Main worker loop - polls queue and processes messages"""
-        logger.info("Worker started - polling Azure Queue for messages...")
-        logger.info(f"Queue: {settings.AZURE_QUEUE_NAME}")
-        
-        try:
-            while self.running:
-                try:
-                    # Receive messages from queue (max 10 at a time)
-                    messages = self.queue_client.receive_messages(
-                        messages_per_page=10,
-                        visibility_timeout=300  # 5 minutes to process
-                    )
-                    
-                    message_count = 0
-                    for message in messages:
-                        message_count += 1
-                        self.process_message(message)
-                    
-                    if message_count > 0:
-                        logger.info(f"Processed {message_count} messages")
-                    
-                    # Sleep briefly before next poll
-                    time.sleep(2)
-                    
-                except KeyboardInterrupt:
-                    logger.info("Worker interrupted by user")
-                    self.running = False
-                    break
-                    
-                except Exception as e:
-                    logger.error(f"Error in worker loop: {e}", exc_info=True)
-                    time.sleep(5)  # Wait before retrying
-                    
-        finally:
-            logger.info("Worker stopped")
+    
 
 
 if __name__ == "__main__":
