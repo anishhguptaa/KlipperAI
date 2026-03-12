@@ -7,8 +7,7 @@ that follows the main face across the video — similar to TikTok / Instagram
 Reels auto-framing.
 
 Pipeline:
-    clip → analyze_frames → detect_faces → compute_crop_positions
-         → smooth_crop_positions → render_dynamic_crop → export
+    clip → SmartCropEngine (Detectors -> Optimizer) → render_dynamic_crop → export
 
 Follows SRP: this module handles ONLY smart framing logic.
 All other editing tasks (cutting, subtitles) remain in video_editing_service.
@@ -16,240 +15,118 @@ All other editing tasks (cutting, subtitles) remain in video_editing_service.
 
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
-import cv2
-import mediapipe as mp
-from mediapipe.tasks.python import BaseOptions
-from mediapipe.tasks.python.vision import FaceDetector, FaceDetectorOptions, RunningMode
-from mediapipe import Image, ImageFormat
 import numpy as np
 from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.video.fx.Crop import Crop
 
 from src.shared.core.logger import get_logger
+from src.worker.services.smart_crop.detectors.face_detector import FaceDetector
+from src.worker.services.smart_crop.detectors.text_detector import TextDetector
+from src.worker.services.smart_crop.smart_crop_engine import SmartCropEngine
 
 logger = get_logger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 
 FRAME_SAMPLE_INTERVAL = 0.5  # seconds between sampled frames
-SMOOTHING_WINDOW_SIZE = 5    # number of positions for moving-average
 MIN_CLIP_DURATION = 1.0      # seconds — clips shorter than this skip analysis
-FACE_DETECTION_CONFIDENCE = 0.3
-
-
-# ── Step 1: Frame Analysis (How We Detect Subject) ──────────────────
-
-def analyze_frames(
-    clip: VideoFileClip,
-    interval: float = FRAME_SAMPLE_INTERVAL,
-) -> List[Tuple[float, np.ndarray]]:
-    """
-    Sample frames from the clip at fixed intervals.
-
-    Args:
-        clip: An open MoviePy VideoFileClip.
-        interval: Seconds between each sampled frame.
-
-    Returns:
-        List of (timestamp, frame_as_numpy_array) tuples.
-    """
-    frames: List[Tuple[float, np.ndarray]] = []
-    duration = clip.duration
-
-    t = 0.0
-    while t < duration:
-        frame = clip.get_frame(t)
-        frames.append((t, frame))
-        t += interval
-
-    logger.info(
-        f"Analyzed {len(frames)} frames over {duration:.1f}s "
-        f"(interval={interval}s)"
-    )
-    return frames
-
-
-# ── Step 2: Face Detection ──────────────────────────────────────────
-
-def detect_faces(
-    frames: List[Tuple[float, np.ndarray]],
-) -> List[Tuple[float, Optional[Tuple[float, float, float, float]]]]:
-    """
-    Run MediaPipe Face Detection on each sampled frame.
-
-    For each frame returns the bounding box of the **largest** detected face,
-    or None if no face is found.
-
-    Args:
-        frames: Output of analyze_frames — list of (timestamp, frame) tuples.
-
-    Returns:
-        List of (timestamp, bbox_or_None) where bbox is
-        (x_center_ratio, y_center_ratio, width_ratio, height_ratio)
-        in normalised [0, 1] coordinates relative to the frame size.
-    """
-    detections: List[Tuple[float, Optional[Tuple[float, float, float, float]]]] = []
-
-    with FaceDetector.create_from_options(
-        FaceDetectorOptions(
-            base_options=BaseOptions(model_asset_path='src/worker/services/models/face_detector.tflite'),
-            running_mode=RunningMode.IMAGE,
-            min_detection_confidence=FACE_DETECTION_CONFIDENCE,
-        )
-    ) as face_detector:
-
-        for timestamp, frame in frames:
-            mp_image = Image(image_format=ImageFormat.SRGB, data=frame)
-            detection_result = face_detector.detect(mp_image)
-            print(detection_result)
-            if not detection_result.detections:
-                detections.append((timestamp, None))
-                continue
-
-            best = max(
-                detection_result.detections,
-                key=lambda d: (
-                    d.bounding_box.width
-                    * d.bounding_box.height
-                ),
-            )
-            bb = best.bounding_box
-            x_center = bb.origin_x + bb.width / 2.0
-            y_center = bb.origin_y + bb.height / 2.0
-            detections.append((timestamp, (x_center, y_center, bb.width, bb.height)))
-
-    faces_found = sum(1 for _, d in detections if d is not None) #generator expression
-    logger.info(
-        f"Face detection complete: {faces_found}/{len(detections)} frames "
-        f"have a detected face"
-    )
-    return detections
-
-
-# ── Step 3: Computing Crop Positions ────────────────────────────────
-
-def compute_crop_positions(
-    detections: List[Tuple[float, Optional[Tuple[float, float, float, float]]]],
-    video_w: int,
-    video_h: int,
-) -> List[Tuple[float, int]]:
-    """
-    Convert face-center positions into horizontal crop-window positions.
-
-    Args:
-        detections: Output of detect_faces.
-        video_w: Original video width in pixels.
-        video_h: Original video height in pixels.
-
-    Returns:
-        List of (timestamp, crop_x) pairs where crop_x is the left edge
-        of the crop window in pixels.
-    """
-    target_width = int(video_h * 9 / 16)
-    center_crop_x = (video_w - target_width) // 2
-
-    positions: List[Tuple[float, int]] = []
-    last_known_x: int = center_crop_x  # fallback if face disappears
-
-    for timestamp, bbox in detections:
-        if bbox is None:
-            # No face detected → reuse last known position
-            crop_x = last_known_x
-        else:
-            face_center_px = int(bbox[0])
-            crop_x = face_center_px - target_width // 2
-            # Clamp within video bounds
-            crop_x = max(0, min(video_w - target_width, crop_x))
-            last_known_x = crop_x
-
-        positions.append((timestamp, crop_x))
-
-    logger.info(f"Computed {len(positions)} crop positions (target_width={target_width}px)")
-    return positions
-
-
-# ── Step 4: Smoothing Movement ──────────────────────────────────────
-
-def smooth_crop_positions(
-    positions: List[Tuple[float, int]],
-    window_size: int = SMOOTHING_WINDOW_SIZE,
-) -> List[Tuple[float, int]]:
-    """
-    Apply a moving-average filter to crop positions to eliminate jitter
-    and produce a smooth camera pan effect.
-
-    Args:
-        positions: Output of compute_crop_positions.
-        window_size: Number of neighbours to average over.
-
-    Returns:
-        Smoothed list of (timestamp, crop_x) pairs.
-    """
-    if len(positions) <= 1:
-        return positions
-
-    crop_values = [x for _, x in positions]
-    smoothed_values: List[int] = []
-
-    half = window_size // 2
-    for i in range(len(crop_values)):
-        start = max(0, i - half)
-        end = min(len(crop_values), i + half + 1)
-        avg = int(sum(crop_values[start:end]) / (end - start))
-        smoothed_values.append(avg)
-
-    smoothed = [
-        (positions[i][0], smoothed_values[i])
-        for i in range(len(positions))
-    ]
-
-    logger.info(f"Smoothed {len(smoothed)} crop positions (window={window_size})")
-    return smoothed
 
 
 # ── Step 5: Applying Dynamic Crop ───────────────────────────────────
 
+from PIL import Image
+
 def render_dynamic_crop(
     clip: VideoFileClip,
-    positions: List[Tuple[float, int]],
+    crop_boxes: List[Tuple[float, Tuple[int, int, int, int]]],
     target_w: int,
     target_h: int,
     output_path: str,
 ) -> str:
     """
-    Apply a time-varying crop to the clip and export the vertical video.
+    Apply a time-varying crop/pad to the clip and export the vertical video.
 
-    Uses numpy array slicing on each frame for maximum compatibility
-    with MoviePy 2.x.
+    Interpolates the crop box for each frame, crops it, scales it to fit
+    the 9:16 target, and pads with black if necessary.
 
     Args:
         clip: The source VideoFileClip.
-        positions: Smoothed (timestamp, crop_x) pairs.
-        target_w: Desired output width (= height * 9/16).
-        target_h: Desired output height (= original height).
+        crop_boxes: Smoothed (timestamp, (x1, y1, x2, y2)) tuples.
+        target_w: Desired output width.
+        target_h: Desired output height.
         output_path: Where to write the result.
 
     Returns:
         The output_path on success.
     """
 
-    # Build a lookup: for a given time t, find the crop_x via interpolation
-    timestamps = np.array([t for t, _ in positions], dtype=np.float64)
-    crop_xs = np.array([x for _, x in positions], dtype=np.float64)
+    # Build lookups for interpolation
+    timestamps = np.array([t for t, _ in crop_boxes], dtype=np.float64)
+    # Extract coords columns: x1, y1, x2, y2
+    coords = np.array([box for _, box in crop_boxes], dtype=np.float64) # Shape (N, 4)
 
-    def _get_crop_x(t: float) -> int:
-        """Interpolate crop_x for an arbitrary time t."""
-        x = int(np.interp(t, timestamps, crop_xs))
-        return max(0, x)
+    def _get_crop_box(t: float) -> Tuple[int, int, int, int]:
+        """Interpolate (x1, y1, x2, y2) for an arbitrary time t."""
+        # Interpolate each component independently
+        c = np.zeros(4, dtype=int)
+        for i in range(4):
+            c[i] = int(np.interp(t, timestamps, coords[:, i]))
+        return tuple(c)
 
-    def _crop_frame(get_frame, t):
-        """Per-frame transform: slice the crop window from the frame."""
-        frame = get_frame(t)
-        x = _get_crop_x(t)
-        return frame[:target_h, x: x + target_w]
+    def _process_frame(get_frame, t):
+        """Per-frame transform: crop -> resize -> pad."""
+        frame = get_frame(t) # Numpy array (H, W, 3)
+        fh, fw = frame.shape[:2]
+        
+        x1, y1, x2, y2 = _get_crop_box(t)
+        
+        # Clamp coordinates to frame boundaries
+        x1 = max(0, min(fw - 1, x1))
+        y1 = max(0, min(fh - 1, y1))
+        x2 = max(x1 + 1, min(fw, x2))
+        y2 = max(y1 + 1, min(fh, y2))
+        
+        # Crop
+        cropped_img = frame[y1:y2, x1:x2]
+        
+        # If crop is empty (shouldn't happen due to clamping), return black
+        if cropped_img.size == 0:
+            return np.zeros((target_h, target_w, 3), dtype=np.uint8)
 
-    cropped = clip.transform(_crop_frame)
+        # Resize and Pad using PIL
+        pil_img = Image.fromarray(cropped_img)
+        cw, ch = pil_img.size
+        
+        # Calculate resize dimensions to FIT inside target_w x target_h
+        target_ratio = target_w / target_h
+        current_ratio = cw / ch
+        
+        if current_ratio > target_ratio:
+            # Wider than target -> Fit width
+            new_w = target_w
+            new_h = int(target_w / current_ratio)
+        else:
+            # Taller -> Fit height
+            new_h = target_h
+            new_w = int(target_h * current_ratio)
+            
+        # Resize (LANCZOS for quality)
+        resized_pil = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
+        
+        # Create black background
+        bg = Image.new('RGB', (target_w, target_h), (0, 0, 0))
+        
+        # Paste centered
+        paste_x = (target_w - new_w) // 2
+        paste_y = (target_h - new_h) // 2
+        
+        bg.paste(resized_pil, (paste_x, paste_y))
+        
+        return np.array(bg)
+
+    cropped = clip.transform(_process_frame)
     cropped = cropped.with_duration(clip.duration)
 
     temp_audio = os.path.splitext(output_path)[0] + "_temp_audio.m4a"
@@ -267,22 +144,18 @@ def render_dynamic_crop(
     return output_path
 
 
-# ── Step 6: Where This Fits In Your Existing Function ───────────────
-# ── Step 7: Edge Cases You Must Handle ──────────────────────────────
+
 
 def smart_crop_clip(input_path: str) -> str:
     """
     Main orchestrator — smart-crop a single clip to 9:16 vertical format.
 
-    Pipeline:
-        analyze_frames → detect_faces → compute_crop_positions
-        → smooth_crop_positions → render_dynamic_crop
+    Uses SmartCropEngine with FaceDetector and TextDetector.
 
     Edge cases handled:
         • Clip shorter than MIN_CLIP_DURATION → falls back to center crop.
-        • No face detected in ANY frame   → falls back to center crop.
-        • Multiple faces in a frame       → largest face is chosen.
-        • Face leaves frame mid-clip      → reuses last known position.
+        • No interesting content detected → falls back to center crop.
+        • Clip already narrower than 9:16 → skipped.
 
     Args:
         input_path: Path to the clip MP4 file (will be replaced in-place).
@@ -319,40 +192,37 @@ def smart_crop_clip(input_path: str) -> str:
             clip.close()
             return input_path
 
-        # 1. Analyze frames
-        frames = analyze_frames(clip, interval=FRAME_SAMPLE_INTERVAL)
+        # Initialize Smart Crop Engine
+        detectors = [
+            FaceDetector(),
+            TextDetector()
+        ]
+        engine = SmartCropEngine(detectors, frame_sample_interval=FRAME_SAMPLE_INTERVAL)
 
-        # 2. Detect faces
-        detections = detect_faces(frames)
-        print(detections)
-        # ── Edge case: no face detected in ANY frame → center crop ──
-        has_any_face = any(d is not None for _, d in detections)
-        if not has_any_face:
-            logger.info("No face detected in any frame, falling back to center crop")
+        # Run Analysis
+        crop_boxes = engine.process_video(clip)
+
+        # Render with Dynamic Layout
+        return render_dynamic_crop(clip, crop_boxes, 1080, 1920, str(temp_output))
+
+    except Exception as e:
+        logger.error(f"Smart crop failed: {e}", exc_info=True)
+        # Fallback to simple center crop if engine fails
+        if clip:
             return _center_crop_fallback(clip, w, h, target_w, target_h, input_path, temp_output)
-
-        # 3. Compute crop positions
-        positions = compute_crop_positions(detections, w, h)
-
-        # 4. Smooth positions
-        smoothed = smooth_crop_positions(positions)
-
-        # 5. Render dynamic crop
-        render_dynamic_crop(clip, smoothed, target_w, target_h, str(temp_output))
-
+        return input_path
     finally:
-        if clip is not None:
+        if clip:
             clip.close()
+        # Rename temp to original
+        if os.path.exists(temp_output):
+            if os.path.exists(input_path):
+                 os.remove(input_path)
+            os.rename(temp_output, input_path)
+            logger.info(f"Replaced original with smart-cropped clip: {input_path}")
 
-    # In-place replacement (same pattern as crop_clips_to_9_16)
-    if temp_output.exists():
-        clip_file.unlink(missing_ok=True)
-        temp_output.rename(clip_file)
-        logger.info(f"Replaced original with smart-cropped clip: {clip_file}")
-    else:
-        raise RuntimeError(f"Smart-cropped file was not created at {temp_output}")
+    return str(input_path)
 
-    return str(clip_file)
 
 
 # ── Internal helper ─────────────────────────────────────────────────
@@ -370,8 +240,6 @@ def _center_crop_fallback(
     Simple center crop — used as a fallback when face detection
     is not applicable (no faces, very short clips, etc.).
     """
-    from moviepy.video.fx.Crop import Crop
-
     x_center = w // 2
     x1 = max(0, x_center - target_w // 2)
     x2 = min(w, x1 + target_w)

@@ -110,6 +110,9 @@ class VideoProcessor:
             update_job_progress(job_id, step="subtitles", progress=90.00)
 
             # 10. Upload clips + persist DB records
+            clips_timestamps_path = os.path.join(
+                "downloads", user_str, video_str, "clips_timestamps.json"
+            )
             clip_records = upload_and_record_clips(
                 clips=clip_path_list,
                 user_id=user_str,
